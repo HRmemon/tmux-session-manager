@@ -187,6 +187,29 @@ send_commands() {
     fi
 }
 
+# Resolve paths relative to a base dir, but preserve absolute and ~/ paths
+resolve_tmux_path() {
+    local base_dir="$1"
+    local raw_path="$2"
+
+    [[ -z "$raw_path" || "$raw_path" == "." ]] && {
+        echo "$base_dir"
+        return
+    }
+
+    case "$raw_path" in
+        /*)
+            echo "$raw_path"
+            ;;
+        ~/*)
+            echo "${HOME}/${raw_path#~/}"
+            ;;
+        *)
+            echo "$base_dir/$raw_path"
+            ;;
+    esac
+}
+
 # Spin up a single session from JSON
 spin_up_session_from_json() {
     local dir="$1"
@@ -194,8 +217,8 @@ spin_up_session_from_json() {
 
     local session_name=$(echo "$session_json" | jq -r '.name')
     local root_rel=$(echo "$session_json" | jq -r '.root // "."')
-    local session_root="$dir"
-    [[ "$root_rel" != "." ]] && session_root="$dir/$root_rel"
+    local session_root
+    session_root=$(resolve_tmux_path "$dir" "$root_rel")
     local workspace=$(echo "$session_json" | jq -r '.workspace // empty')
 
     # If session already exists, just return its name and workspace
@@ -208,8 +231,8 @@ spin_up_session_from_json() {
     local first_window=$(echo "$session_json" | jq '.windows[0]')
     local fw_name=$(echo "$first_window" | jq -r '.name')
     local fw_path=$(echo "$first_window" | jq -r '.path // "."')
-    local fw_target="$session_root"
-    [[ "$fw_path" != "." ]] && fw_target="$session_root/$fw_path"
+    local fw_target
+    fw_target=$(resolve_tmux_path "$session_root" "$fw_path")
 
     tmux new-session -d -s "$session_name" -c "$fw_target" -n "$fw_name"
 
@@ -229,8 +252,8 @@ spin_up_session_from_json() {
         w_name=$(echo "$window" | jq -r '.name')
         local w_path
         w_path=$(echo "$window" | jq -r '.path // "."')
-        local w_target="$session_root"
-        [[ "$w_path" != "." ]] && w_target="$session_root/$w_path"
+        local w_target
+        w_target=$(resolve_tmux_path "$session_root" "$w_path")
 
         tmux new-window -t "$session_name" -c "$w_target" -n "$w_name"
         send_commands "$session_name" "$w_name" "$window"
