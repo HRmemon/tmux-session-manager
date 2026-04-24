@@ -129,7 +129,7 @@ create_session() {
 attach_or_switch() {
     local session_name="$1"
 
-    if [[ -z "$TMUX" ]]; then
+    if [[ -z "${TMUX:-}" ]]; then
         tmux attach-session -t "$session_name"
     else
         tmux switch-client -t "$session_name"
@@ -362,7 +362,89 @@ EOF
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Interactive Menu
+# Session Utilities
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Kill a named tmux session with confirmation
+kill_session() {
+    local session_name="$1"
+    echo "Kill session '$session_name'? [y/N]: "
+    read -r confirm || true
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        tmux kill-session -t "$session_name"
+        echo "Session '$session_name' killed."
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Menu Action Dispatch (shared by fzf and rofi menus)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Execute a selected menu action.
+# Usage: execute_menu_action <selected> <dir> <num_windows> <workspace> [key_pressed]
+# key_pressed is optional; "ctrl-o" opens in a new terminal instead of attaching.
+execute_menu_action() {
+    local selected="$1"
+    local dir="$2"
+    local num_windows="$3"
+    local workspace="$4"
+    local key_pressed="${5:-}"
+
+    local base_name
+    base_name=$(get_session_base_name "$dir")
+
+    case "$selected" in
+        "ATTACH: "*)
+            local session="${selected#ATTACH: }"
+            if [[ "$key_pressed" == "ctrl-o" ]]; then
+                open_terminal_with_session "$session" ""
+            else
+                attach_or_switch "$session"
+            fi
+            ;;
+        "NEW: "*)
+            local session_name
+            session_name=$(get_next_session_name "$base_name")
+            create_session "$session_name" "$dir" "$num_windows" "$workspace"
+            if [[ "$key_pressed" == "ctrl-o" ]]; then
+                open_terminal_with_session "$session_name" "$workspace"
+            else
+                attach_or_switch "$session_name"
+            fi
+            ;;
+        "PROJECT: ALL"*)
+            local first
+            first=$(spin_up_all_sessions "$dir")
+            [[ -n "$first" ]] && attach_or_switch "$first"
+            ;;
+        "PROJECT: "*)
+            local session_name="${selected#PROJECT: }"
+            local session_json
+            session_json=$(jq -r ".[] | select(.name == \"$session_name\")" "$dir/$TMUX_CONFIG_FILE")
+            local result
+            result=$(spin_up_session_from_json "$dir" "$session_json")
+            local ws="${result##*:}"
+            if [[ -n "$ws" && "$ws" != "null" && "$ws" != "" ]]; then
+                move_to_workspace "$ws"
+            fi
+            if [[ "$key_pressed" == "ctrl-o" ]]; then
+                open_terminal_with_session "$session_name" "$ws"
+            else
+                attach_or_switch "$session_name"
+            fi
+            ;;
+        "GENERATE: "* | "REGENERATE: "*)
+            local config_path
+            config_path=$(generate_template "$dir")
+            echo "Template created: $config_path"
+            echo ""
+            echo "Edit the file and run tm again to use it."
+            ;;
+    esac
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Interactive Menu (fzf)
 # ─────────────────────────────────────────────────────────────────────────────
 
 build_menu_options() {
@@ -410,46 +492,22 @@ run_interactive_menu() {
 
     local base_name=$(get_session_base_name "$dir")
 
-    # Build and show menu
-    local selected=$(build_menu_options "$dir" "$num_windows" | \
+    # Build and show menu (with Ctrl-o to open in a new terminal)
+    local fzf_output
+    fzf_output=$(build_menu_options "$dir" "$num_windows" | \
         fzf --prompt="tmux [$base_name] > " \
             --height=50% \
             --reverse \
             --border \
-            --no-separator)
+            --no-separator \
+            --expect=ctrl-o)
+
+    local fzf_lines=()
+    mapfile -t fzf_lines <<< "$fzf_output"
+    local key_pressed="${fzf_lines[0]:-}"
+    local selected="${fzf_lines[1]:-}"
 
     [[ -z "$selected" ]] && return 0
 
-    # Handle selection
-    case "$selected" in
-        "ATTACH: "*)
-            local session="${selected#ATTACH: }"
-            attach_or_switch "$session"
-            ;;
-        "NEW: "*)
-            local session_name=$(get_next_session_name "$base_name")
-            create_session "$session_name" "$dir" "$num_windows" "$workspace"
-            attach_or_switch "$session_name"
-            ;;
-        "PROJECT: ALL"*)
-            local first=$(spin_up_all_sessions "$dir")
-            [[ -n "$first" ]] && attach_or_switch "$first"
-            ;;
-        "PROJECT: "*)
-            local session_name="${selected#PROJECT: }"
-            local session_json=$(jq -r ".[] | select(.name == \"$session_name\")" "$dir/$TMUX_CONFIG_FILE")
-            local result=$(spin_up_session_from_json "$dir" "$session_json")
-            local workspace="${result##*:}"
-            if [[ -n "$workspace" && "$workspace" != "null" && "$workspace" != "" ]]; then
-                move_to_workspace "$workspace"
-            fi
-            attach_or_switch "$session_name"
-            ;;
-        "GENERATE: "* | "REGENERATE: "*)
-            local config_path=$(generate_template "$dir")
-            echo "Template created: $config_path"
-            echo ""
-            echo "Edit the file and run tm again to use it."
-            ;;
-    esac
+    execute_menu_action "$selected" "$dir" "$num_windows" "$workspace" "$key_pressed"
 }

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-# tm — tmux session manager for current directory
+# tma — list all tmux sessions and attach to selected
 #
 # Usage:
-#   tm                 Interactive menu (default 2 windows)
-#   tm 3               Interactive menu, NEW creates 3 windows
-#   tm -q              Quick: create 2 windows, skip menu
-#   tm -q 3            Quick: create 3 windows, skip menu
-#   tm 3 -w 5          Interactive, move to workspace 5
-#   tm -q 3 -w 5       Quick: 3 windows on workspace 5
+#   tma                   fzf list of sessions, select one to attach
+#
+# Keybindings:
+#   Enter    Attach/switch to session
+#   Ctrl-o   Open in a new terminal
+#   Ctrl-d   Kill session (with confirmation)
 # ═══════════════════════════════════════════════════════════════════════════
 exec "$(dirname "$(readlink -f "$0")")/tmux-manager" "$@"

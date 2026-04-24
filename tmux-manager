@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+# tmux-manager — unified tmux session management
+#
+# Dispatches on basename of invocation:
+#   tm     Current-directory session management
+#   ts     Sessionizer (pick directory first)
+#   tma    List ALL sessions, fzf-pick, attach
+#
+# Symlink tm, ts, tma → this script.
+# ═══════════════════════════════════════════════════════════════════════════
+
+set -euo pipefail
+
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+source "$SCRIPT_DIR/tmux-core.sh"
+
+MODE="$(basename "$0")"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tma — List all tmux sessions, pick with fzf, attach
+# ─────────────────────────────────────────────────────────────────────────────
+tma_mode() {
+    local sessions
+    sessions=$(tmux list-sessions -F "#{session_name}" 2>/dev/null)
+
+    if [[ -z "$sessions" ]]; then
+        echo "No tmux sessions running." >&2
+        exit 0
+    fi
+
+    local fzf_output
+    fzf_output=$(printf '%s\n' "$sessions" | \
+        fzf --prompt="Attach to > " \
+            --height=50% \
+            --reverse \
+            --border \
+            --expect=ctrl-o,ctrl-d \
+            --preview='tmux list-windows -t {} -F "  #I  #W  #{?window_active,←, }"' \
+            --preview-window=right:30%)
+
+    local fzf_lines=()
+    mapfile -t fzf_lines <<< "$fzf_output"
+    local key_pressed="${fzf_lines[0]:-}"
+    local selected="${fzf_lines[1]:-}"
+
+    [[ -z "$selected" ]] && exit 0
+
+    case "$key_pressed" in
+        ctrl-o)
+            open_terminal_with_session "$selected" ""
+            ;;
+        ctrl-d)
+            kill_session "$selected"
+            ;;
+        *)
+            attach_or_switch "$selected"
+            ;;
+    esac
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tm — Current-directory session management
+# ─────────────────────────────────────────────────────────────────────────────
+tm_mode() {
+    local quick_mode=false
+    local num_windows=2
+    local workspace=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -q|--quick)
+                quick_mode=true
+                shift
+                ;;
+            -w|--workspace)
+                workspace="$2"
+                shift 2
+                ;;
+            [0-9]*)
+                num_windows="$1"
+                shift
+                ;;
+            -h|--help)
+                cat << 'HELP'
+tm — tmux session manager for current directory
+
+Usage:
+  tm                 Interactive menu (default 2 windows)
+  tm 3               Interactive menu, NEW creates 3 windows
+  tm -q              Quick: create 2 windows, skip menu
+  tm -q 3            Quick: create 3 windows, skip menu
+  tm 3 -w 5          Interactive, move to workspace 5
+  tm -q 3 -w 5       Quick: 3 windows on workspace 5
+
+Options:
+  -q, --quick        Skip menu, create session immediately
+  -w, --workspace N  Move to Hyprland workspace N
+  -h, --help         Show this help
+HELP
+                exit 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if $quick_mode; then
+        local base_name
+        base_name=$(get_session_base_name "$PWD")
+        local session_name
+        session_name=$(get_next_session_name "$base_name")
+        create_session "$session_name" "$PWD" "$num_windows" "$workspace"
+        attach_or_switch "$session_name"
+    else
+        run_interactive_menu "$PWD" "$num_windows" "$workspace"
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ts — Sessionizer (pick directory first)
+# ─────────────────────────────────────────────────────────────────────────────
+ts_mode() {
+    local quick_mode=false
+    local selected=""
+    local num_windows=2
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -q|--quick)
+                quick_mode=true
+                shift
+                ;;
+            -h|--help)
+                echo "ts — tmux sessionizer"
+                echo ""
+                echo "Usage:"
+                echo "  ts                    fzf to pick dir, then interactive menu"
+                echo "  ts ~/projects/foo     Skip dir picker, menu for that dir"
+                echo "  ts -q                 fzf to pick dir, quick create"
+                echo "  ts -q ~/projects/foo  Quick create in specified dir"
+                echo ""
+                echo "Options:"
+                echo "  -q, --quick           Skip menu, create session immediately"
+                echo "  -h, --help            Show this help"
+                echo ""
+                echo "Search directories:"
+                for d in "${TMUX_SEARCH_DIRS[@]}"; do
+                    echo "  - $d"
+                done
+                exit 0
+                ;;
+            *)
+                if [[ -d "$1" ]]; then
+                    selected="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Directory selection
+    if [[ -z "$selected" ]]; then
+        selected=$(find "${TMUX_SEARCH_DIRS[@]}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | \
+            sort -u | \
+            fzf --prompt="Select project > " \
+                --height=50% \
+                --reverse \
+                --border \
+                --preview='ls -la {} 2>/dev/null | head -20' \
+                --preview-window=right:40%)
+    fi
+
+    [[ -z "$selected" ]] && exit 0
+
+    if $quick_mode; then
+        local base_name
+        base_name=$(get_session_base_name "$selected")
+        local session_name
+        session_name=$(get_next_session_name "$base_name")
+        create_session "$session_name" "$selected" "$num_windows" ""
+        attach_or_switch "$session_name"
+    else
+        run_interactive_menu "$selected" "$num_windows" ""
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dispatch
+# ─────────────────────────────────────────────────────────────────────────────
+case "$MODE" in
+    tm)  tm_mode  "$@" ;;
+    ts)  ts_mode  "$@" ;;
+    tma) tma_mode "$@" ;;
+    *)
+        echo "Usage: invoke as tm, ts, or tma (symlink)" >&2
+        exit 1
+        ;;
+esac

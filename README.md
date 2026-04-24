@@ -1,14 +1,14 @@
 # Tmux Session Manager
 
-A tmux session management system with two entry points: `tm` (current directory) and `ts` (sessionizer/directory picker). Supports per-project JSON configs for reproducible multi-session setups.
+A unified tmux session management system with three entry points: `tm` (current directory), `ts` (sessionizer/directory picker), and `tma` (attach to any session). Supports per-project JSON configs for reproducible multi-session setups.
 
 Inspired by [ThePrimeagen's tmux-sessionizer](https://github.com/ThePrimeagen/tmux-sessionizer).
 
 ## Requirements
 
-- **tmux** - terminal multiplexer
-- **fzf** - fuzzy finder for interactive menus
-- **jq** - JSON parser for project configs
+- **tmux** — terminal multiplexer
+- **fzf** — fuzzy finder for interactive menus
+- **jq** — JSON parser for project configs
 
 Optional (for multi-session workspace support):
 - A terminal emulator that supports detached spawning (default: **kitty**)
@@ -21,18 +21,22 @@ git clone https://github.com/HRmemon/tmux-session-manager.git
 cd tmux-session-manager
 
 # Add to PATH (pick one)
-export PATH="$PWD:$PATH"                         # temporary
-ln -s "$PWD/tm" ~/.local/bin/tm                   # symlink
+export PATH="$PWD:$PATH"                              # temporary
+ln -s "$PWD/tm" ~/.local/bin/tm                        # symlink each entry
 ln -s "$PWD/ts" ~/.local/bin/ts
+ln -s "$PWD/tma" ~/.local/bin/tma
 ```
 
 ## File Structure
 
 ```
 tmux-session-manager/
-├── tm              # Current directory entry point
-├── ts              # Sessionizer entry point (pick dir first)
-└── tmux-core.sh    # Shared library (sourced, not executed)
+├── tm              # Wrapper → tmux-manager (current dir mode)
+├── ts              # Wrapper → tmux-manager (sessionizer mode)
+├── tma             # Wrapper → tmux-manager (list & attach mode)
+├── tmux-manager    # Unified dispatcher (dispatches on $0)
+├── tmux-core.sh    # Shared library (sourced, not executed)
+└── tmux-rofi.sh    # Optional rofi frontend (alternative to fzf)
 ```
 
 ## Features
@@ -45,10 +49,13 @@ tmux-session-manager/
 | Workspace integration | Move terminal to WM workspace (pluggable) |
 | Template generation | Auto-detect subdirs and create starter JSON |
 | Attach-or-create | PROJECT options attach to existing sessions instead of recreating |
+| Attach to any session | `tma` lists all running sessions with fzf preview |
+| Open in new terminal | **Ctrl-o** on any session — spawns a new terminal instead of switching |
+| Kill sessions | **Ctrl-d** in `tma` — kills a session with confirmation |
 
 ## Usage
 
-### `tm` - Current Directory Mode
+### `tm` — Current Directory Mode
 
 ```bash
 tm                 # Interactive menu (default 2 windows)
@@ -59,7 +66,7 @@ tm 3 -w 5          # Menu, move to workspace 5
 tm -q 2 -w 9       # Quick: 2 windows on workspace 9
 ```
 
-### `ts` - Sessionizer Mode
+### `ts` — Sessionizer Mode
 
 ```bash
 ts                    # fzf to pick dir, then interactive menu
@@ -68,21 +75,38 @@ ts -q                 # Pick dir, quick create (no menu)
 ts -q ~/projects/foo  # Quick create in specified dir
 ```
 
-### Interactive Menu Options
+### `tma` — List & Attach
 
-When running `tm` or `ts`, the menu shows:
+```bash
+tma                   # fzf list of all sessions, pick one to attach
+```
+
+| Key | Action |
+|-----|--------|
+| **Enter** | Attach/switch to session |
+| **Ctrl-o** | Open session in a new terminal |
+| **Ctrl-d** | Kill session (with confirmation) |
+
+### Interactive Menu (tm / ts)
+
+When running `tm` or `ts`, the fzf menu shows:
 
 ```
-ATTACH: project           <- Existing sessions for this dir
+ATTACH: project           ← Existing sessions for this dir
 ATTACH: project_2
 NEW: Quick session (2 windows)
------------------------------------
-PROJECT: ALL (spin up everything)    <- If JSON config exists
+───────────────────────────────────
+PROJECT: ALL (spin up everything)    ← If JSON config exists
 PROJECT: project-dev
 PROJECT: project-servers
------------------------------------
-GENERATE: Create tmux_sessions.json  <- Template generator
+───────────────────────────────────
+GENERATE: Create tmux_sessions.json  ← Template generator
 ```
+
+| Key | On ATTACH / NEW / PROJECT |
+|-----|--------------------------|
+| **Enter** | Attach/switch as usual |
+| **Ctrl-o** | Open session in a new terminal instead |
 
 ## Project Configuration
 
@@ -133,7 +157,7 @@ The `command` field supports both formats:
 // Single command (string)
 { "command": "nvim" }
 
-// Multiple commands (array) - runs sequentially
+// Multiple commands (array) — runs sequentially
 { "command": ["source .venv/bin/activate", "python manage.py runserver"] }
 
 // Empty (no command)
@@ -165,7 +189,7 @@ TMUX_SEARCH_DIRS=(
 
 ### Window Manager / Terminal Integration
 
-The workspace and terminal-spawning logic is contained in two functions at the top of `tmux-core.sh`. Override them to match your setup:
+The workspace and terminal-spawning logic is contained in two functions at the top of `tmux-core.sh`. Override them to match your setup.
 
 #### `move_to_workspace`
 
@@ -217,7 +241,7 @@ The `GENERATE` option scans for subdirectories and creates a starter JSON:
 ## Session Naming
 
 Sessions are named after the directory:
-- Spaces and dots become underscores: `my project` -> `my_project`
+- Spaces and dots become underscores: `my project` → `my_project`
 - Multiple sessions: `project`, `project_2`, `project_3`, ...
 
 ## Extending
@@ -226,11 +250,16 @@ Sessions are named after the directory:
 
 1. Edit `build_menu_options()` in `tmux-core.sh`
 2. Add your option string to the `options` array
-3. Handle it in `run_interactive_menu()` with a new `case` branch
+3. Handle it in `execute_menu_action()` with a new `case` branch
+
+### Adding a new entry point
+
+1. Symlink `tmux-manager` to a new name (e.g., `ln -s tmux-manager mycmd`)
+2. Add a `mycmd_mode()` function and a new case in the dispatch at the bottom of `tmux-manager`
 
 ### Adding a new flag to `tm` or `ts`
 
-1. Add argument parsing in the `while [[ $# -gt 0 ]]` loop
+1. Add argument parsing in the `while [[ $# -gt 0 ]]` loop inside `tm_mode()` or `ts_mode()` in `tmux-manager`
 2. Pass the value to `run_interactive_menu` or handle in quick mode
 
 ## Troubleshooting
