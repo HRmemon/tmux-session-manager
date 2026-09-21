@@ -117,7 +117,7 @@ create_session() {
     done
 
     # Select first window
-    tmux select-window -t "$session_name:1"
+    tmux select-window -t "$session_name:0"
 
     # Move to workspace if specified
     if [[ -n "$workspace" ]]; then
@@ -260,7 +260,7 @@ spin_up_session_from_json() {
         idx=$((idx + 1))
     done
 
-    tmux select-window -t "$session_name:1"
+    tmux select-window -t "$session_name:0"
 
     # Return session name and workspace for caller to handle
     echo "$session_name:$workspace"
